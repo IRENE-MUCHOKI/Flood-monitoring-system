@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Flood Early Warning Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 30px; color: #333; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h2 { color: #007bff; text-align: center; margin-top: 0; }
+        .btn { display: block; width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; margin-bottom: 20px; }
+        .btn:hover { background: #0056b3; }
+        .card { background: #f8f9fa; border-left: 6px solid #ccc; padding: 15px; margin-bottom: 15px; border-radius: 4px; }
+        .card h3 { margin: 0 0 5px 0; font-size: 13px; color: #666; text-transform: uppercase; }
+        .card span { font-size: 26px; font-weight: bold; }
+        #statusCard { border-left-color: #28a745; }
+        #statusText { color: #28a745; }
+        .log-box { background: #1e1e1e; color: #00ff00; padding: 10px; border-radius: 6px; font-family: monospace; height: 100px; overflow-y: auto; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Flood Early Warning System</h2>
+        <button class="btn" id="connectBtn">Connect Arduino via USB</button>
+        
+        <div class="card" id="statusCard">
+            <h3>System Status</h3>
+            <span id="statusText">DISCONNECTED</span>
+        </div>
+        
+        <div class="card">
+            <h3>Water Height</h3>
+            <span id="heightText">0.0</span> cm
+        </div>
+        
+        <div class="card">
+            <h3>Rate of Rise (Speed)</h3>
+            <span id="rateText">0.00</span> cm/s
+        </div>
+
+        <h3>Live Data Log</h3>
+        <div class="log-box" id="logBox">Waiting for connection...</div>
+    </div>
+
+    <script>
+        const connectBtn = document.getElementById('connectBtn');
+        const statusText = document.getElementById('statusText');
+        const statusCard = document.getElementById('statusCard');
+        const heightText = document.getElementById('heightText');
+        const rateText = document.getElementById('rateText');
+        const logBox = document.getElementById('logBox');
+
+        let port, reader, readLoopActive = false;
+
+        connectBtn.addEventListener('click', async () => {
+            if (port) {
+                readLoopActive = false;
+                if (reader) await reader.cancel();
+                await port.close();
+                port = null;
+                connectBtn.innerText = "Connect Arduino via USB";
+                statusText.innerText = "DISCONNECTED";
+                statusCard.style.borderLeftColor = "#ccc";
+                statusText.style.color = "#333";
+                appendLog("Disconnected.");
+                return;
+            }
+
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 9600 });
+                
+                connectBtn.innerText = "Disconnect";
+                appendLog("Connected to Arduino port.");
+                statusText.innerText = "SAFE";
+
+                readLoopActive = true;
+                const textDecoder = new TextDecoderStream();
+                port.readable.pipeTo(textDecoder.writable);
+                reader = textDecoder.readable.getReader();
+
+                let buffer = "";
+                while (readLoopActive) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += value;
+                    let lines = buffer.split("\n");
+                    buffer = lines.pop();
+
+                    for (let line of lines) {
+                        line = line.trim();
+                        if (line) {
+                            appendLog(line);
+                            parseData(line);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error("Error:", error);
+                appendLog("Error: " + error);
+            }
+        });
+
+        function parseData(dataStr) {
+            try {
+                let parts = dataStr.split('|');
+                let dataObj = {};
+                parts.forEach(part => {
+                    let kv = part.split(':');
+                    if (kv.length === 2) dataObj[kv[0]] = kv[1];
+                });
+
+                if (dataObj['HEIGHT'] !== undefined) heightText.innerText = dataObj['HEIGHT'];
+                if (dataObj['RATE'] !== undefined) rateText.innerText = dataObj['RATE'];
+                
+                if (dataObj['STATUS'] !== undefined) {
+                    let st = dataObj['STATUS'];
+                    statusText.innerText = st;
+                    if (st === 'SAFE') {
+                        statusCard.style.borderLeftColor = '#28a745';
+                        statusText.style.color = '#28a745';
+                    } else if (st === 'WARNING') {
+                        statusCard.style.borderLeftColor = '#ffc107';
+                        statusText.style.color = '#b8860b';
+                    } else if (st === 'DANGER' || st === 'FLASH_FLOOD') {
+                        statusCard.style.borderLeftColor = '#dc3545';
+                        statusText.style.color = '#dc3545';
+                    }
+                }
+            } catch (e) {
+                console.error("Parse error", e);
+            }
+        }
+
+        function appendLog(text) {
+            logBox.innerHTML += `<div>> ${text}</div>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    </script>
+</body>
+</html>
